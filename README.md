@@ -6,7 +6,7 @@ colorTo: indigo
 sdk: docker
 pinned: false
 tags:
-  - openenv
+- openenv
 ---
 
 # DigiKul-v0 🎓📡
@@ -107,7 +107,7 @@ $$R_t = R_{\text{utility}} - \lambda_1 P_{\text{overload}} - \lambda_2 P_{\text{
 
 $$G = \frac{\sum_t \sum_i U_i(t)}{\sum_t U^*_{\text{greedy}}(t)}$$
 
-Where $U_i^*$ is a greedy approximation of the theoretical maximum utility (prioritising high-capacity nodes). The final ratio is clamped to [0.0, 1.0] to ensure strict bounds.
+Where $U^*_{\text{greedy}}$ is a greedy approximation of the theoretical maximum utility (prioritising high-capacity nodes). The final ratio is clamped to [0.0, 1.0] to ensure strict bounds.
 
 ---
 
