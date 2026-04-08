@@ -275,6 +275,7 @@ def run_episode(
               f"Budget: {obs.server_bandwidth} Mbps | Steps: {obs.max_time_steps}")
         print(f"{'='*60}")
 
+    print(f"[START] task={task_name}", flush=True)
     while not obs.done:
         # Format observation into text prompt
         prompt = format_observation_prompt(obs)
@@ -306,6 +307,7 @@ def run_episode(
         # Step the environment
         obs = env.step(action)
         total_reward += obs.reward
+        print(f"[STEP] step={obs.time_step} reward={obs.reward}", flush=True)
 
         if verbose and obs.time_step % 10 == 0:
             print(f"  Step {obs.time_step}/{obs.max_time_steps} | "
@@ -314,6 +316,7 @@ def run_episode(
     # Get final state with grader
     final_state = env.state
     grader = final_state.grader_score
+    print(f"[END] task={task_name} score={grader} steps={obs.time_step}", flush=True)
 
     if verbose:
         print(f"\n  ── Episode Complete ──")
