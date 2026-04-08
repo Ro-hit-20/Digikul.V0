@@ -107,7 +107,7 @@ $$R_t = R_{\text{utility}} - \lambda_1 P_{\text{overload}} - \lambda_2 P_{\text{
 
 $$G = \frac{\sum_t \sum_i U_i(t)}{\sum_t \sum_i U_i^*(t)}$$
 
-Where $U_i^*$ is the oracle (theoretical maximum) utility. **Proven** to stay in [0.0, 1.0] by construction — the oracle's allocation is the physical maximum.
+Where $U_i^*$ is a greedy approximation of the theoretical maximum utility (prioritising high-capacity nodes). The final ratio is clamped to [0.0, 1.0] to ensure strict bounds.
 
 ---
 

@@ -215,10 +215,11 @@ class DigiKulEnvironment:
         for i in range(self.num_nodes):
             s = int(self._num_students[i])
             cap = self._local_capacity(i)
-            nodes_info.append((s, cap))
+            if s > 0:
+                nodes_info.append((s, cap))
             
-        # Sort by students descending, then capacity descending
-        nodes_info.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        # Sort by capacity descending, then students descending
+        nodes_info.sort(key=lambda x: (x[1], x[0]), reverse=True)
         
         total_utility = 0.0
         remaining_budget = self._cfg.server_bandwidth
