@@ -13,7 +13,7 @@ tags:
 
 **A Meta OpenEnv RL Environment for Remote Education Bandwidth Orchestration**
 
-> *Team GreyCode*  •  Meta PyTorch OpenEnv Hackathon
+> *Team GreyOrange*  •  Meta PyTorch OpenEnv Hackathon
 
 ---
 

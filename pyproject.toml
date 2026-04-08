@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = {text = "BSD-3-Clause"}
 
 authors = [
-    {name = "GreyCode", email = "greycode@example.com"},
+    {name = "GreyOrange", email = "greyorange@example.com"},
 ]
 
 dependencies = [

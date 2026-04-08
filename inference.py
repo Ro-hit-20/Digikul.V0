@@ -5,26 +5,27 @@ This script evaluates a language model within the DigiKul-v0 environment
 using the OpenAI Python client, as required by the Meta OpenEnv Hackathon.
 
 Authentication:
-    Reads HF_TOKEN from environment variables and uses it to authenticate
-    with a Hugging Face Inference Endpoint (OpenAI-compatible API).
+    Reads API_BASE_URL and API_KEY from environment variables (injected by
+    the Meta/Scaler validator). Falls back to HF_API_BASE and HF_TOKEN for
+    local development runs.
 
 Workflow:
-    1. Connect to the DigiKul environment (local server)
+    1. Initialise the OpenAI client against the injected LiteLLM proxy.
     2. For each difficulty task (easy, medium, hard):
-       a. Reset the environment
-       b. At each timestep, format the observation into a text prompt
-       c. Send the prompt to the LLM via the OpenAI API client
-       d. Parse the LLM's text response into a DigiKulAction
-       e. Step the environment with the parsed action
-    3. Report the programmatic grader score for each task
+       a. Reset the environment and emit a [START] log line.
+       b. At each timestep, format the observation into a text prompt.
+       c. Send the prompt to the LLM via the OpenAI API client.
+       d. Parse the LLM's text response into a DigiKulAction.
+       e. Step the environment and emit a [STEP] log line.
+    3. Emit an [END] log line and report the programmatic grader score.
 
-Usage:
+Usage (local dev):
     export HF_TOKEN="hf_xxx..."
+    export HF_API_BASE="https://api-inference.huggingface.co/v1"   # optional
     python inference.py
 
-    # Or with custom env URL:
-    export DIGIKUL_ENV_URL="http://localhost:7860"
-    python inference.py
+Usage (validator — env vars injected automatically):
+    API_BASE_URL=<proxy_url> API_KEY=<proxy_key> python inference.py
 """
 
 from __future__ import annotations
@@ -33,10 +34,9 @@ import json
 import os
 import re
 import sys
-import time
 from typing import List, Optional
 
-# ── Ensure package is importable ──
+# ── Ensure package root is importable ──
 sys.path.insert(0, os.path.dirname(__file__))
 
 from openai import OpenAI
@@ -47,26 +47,63 @@ from server.digikul_environment import DigiKulEnvironment, TASK_REGISTRY
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Configuration
+#
+#  Priority order (most-specific first):
+#    1. API_BASE_URL / API_KEY   — injected by the Meta/Scaler validator
+#    2. HF_API_BASE  / HF_TOKEN  — local development fallback
 # ═══════════════════════════════════════════════════════════════════════════
 
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-if not HF_TOKEN:
-    print("⚠️  WARNING: HF_TOKEN not set. LLM calls will fail.")
-    print("   Set it with: export HF_TOKEN='hf_...'")
+# --- API base URL: validator proxy takes priority ---
+API_BASE_URL: str = (
+    os.environ.get("API_BASE_URL")          # validator-injected
+    or os.environ.get("HF_API_BASE")        # local dev override
+    or "https://api-inference.huggingface.co/v1"  # hard fallback
+)
 
-# HuggingFace Inference API (OpenAI-compatible endpoint)
-# Uses a small, fast model for baseline — can be changed to any HF model
-HF_MODEL = os.environ.get(
-    "HF_MODEL",
-    "mistralai/Mistral-7B-Instruct-v0.3"
+# --- API key: validator proxy takes priority ---
+API_KEY: str = (
+    os.environ.get("API_KEY")              # validator-injected
+    or os.environ.get("HF_TOKEN")          # local dev fallback
+    or ""
 )
-HF_API_BASE = os.environ.get(
-    "HF_API_BASE",
-    "https://api-inference.huggingface.co/v1"
+
+if not API_KEY:
+    print(
+        "WARNING: Neither API_KEY nor HF_TOKEN is set. "
+        "LLM calls will fail.",
+        flush=True,
+    )
+
+# --- Model name ---
+# The validator may inject MODEL_NAME; fall back to a sensible default.
+MODEL_NAME: str = (
+    os.environ.get("MODEL_NAME")
+    or os.environ.get("HF_MODEL")
+    or "mistralai/Mistral-7B-Instruct-v0.3"
 )
+
+# Environment benchmark name (used in [START] log tag)
+ENV_NAME: str = os.environ.get("DIGIKUL_ENV_NAME", "digikul-v0")
 
 # Number of retries for LLM parsing failures
-MAX_PARSE_RETRIES = 3
+MAX_PARSE_RETRIES: int = 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  OpenAI client
+# ═══════════════════════════════════════════════════════════════════════════
+
+def create_openai_client() -> OpenAI:
+    """
+    Create an OpenAI-compatible client.
+
+    Always uses API_BASE_URL and API_KEY so that, when the validator
+    injects those variables, every request flows through the LiteLLM proxy.
+    """
+    return OpenAI(
+        api_key=API_KEY,
+        base_url=API_BASE_URL,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -125,7 +162,7 @@ def format_observation_prompt(obs: DigiKulObservation) -> str:
     lines.append("")
     lines.append(
         "Decide the quality level (0-3) for each node. "
-        "Respond with ONLY the JSON: {\"quality_levels\": [...]}"
+        'Respond with ONLY the JSON: {"quality_levels": [...]}'
     )
 
     return "\n".join(lines)
@@ -135,18 +172,10 @@ def format_observation_prompt(obs: DigiKulObservation) -> str:
 #  LLM Interaction
 # ═══════════════════════════════════════════════════════════════════════════
 
-def create_openai_client() -> OpenAI:
-    """Create an OpenAI client pointed at the HuggingFace Inference API."""
-    return OpenAI(
-        api_key=HF_TOKEN,
-        base_url=HF_API_BASE,
-    )
-
-
 def query_llm(client: OpenAI, observation_text: str) -> str:
     """Send a prompt to the LLM and return the raw text response."""
     response = client.chat.completions.create(
-        model=HF_MODEL,
+        model=MODEL_NAME,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": observation_text},
@@ -165,13 +194,12 @@ def parse_llm_response(response_text: str, num_nodes: int) -> Optional[DigiKulAc
     Returns None if parsing fails.
     """
     try:
-        # Strip markdown code fences if present
         cleaned = response_text
         cleaned = re.sub(r"```json\s*", "", cleaned)
         cleaned = re.sub(r"```\s*", "", cleaned)
         cleaned = cleaned.strip()
 
-        # Try to extract JSON object
+        # Extract the first JSON object found
         match = re.search(r'\{[^}]+\}', cleaned)
         if match:
             cleaned = match.group()
@@ -185,7 +213,6 @@ def parse_llm_response(response_text: str, num_nodes: int) -> Optional[DigiKulAc
         else:
             return None
 
-        # Validate and clip
         if len(levels) != num_nodes:
             return None
 
@@ -198,53 +225,38 @@ def parse_llm_response(response_text: str, num_nodes: int) -> Optional[DigiKulAc
 
 def get_fallback_action(obs: DigiKulObservation) -> DigiKulAction:
     """
-    Deterministic fallback if the LLM fails to produce a valid action.
-    Uses a simple proportional heuristic based on student count and weather.
+    Deterministic fallback used when the LLM fails to produce a valid action.
+    Uses a proportional heuristic based on student count and weather factor.
     """
-    N = len(obs.nodes)
     budget = obs.server_bandwidth
-    levels = []
-
-    # Score each node by (students × weather)
-    scores = []
-    for node in obs.nodes:
-        score = node.num_students * node.weather_factor
-        scores.append(score)
-
+    scores = [node.num_students * node.weather_factor for node in obs.nodes]
     total_score = sum(scores) + 1e-8
+    levels: List[int] = []
 
     for i, node in enumerate(obs.nodes):
         if node.num_students == 0:
             levels.append(0)
             continue
-
-        # Proportional share of budget
         share = (scores[i] / total_score) * budget
-        local_cap = node.local_capacity
-
-        # Pick highest quality that fits
-        if share >= 5.0 and local_cap >= 5.0:
+        cap = node.local_capacity
+        if share >= 5.0 and cap >= 5.0:
             levels.append(3)
-        elif share >= 2.0 and local_cap >= 2.0:
+        elif share >= 2.0 and cap >= 2.0:
             levels.append(2)
-        elif share >= 0.5 and local_cap >= 0.5:
+        elif share >= 0.5 and cap >= 0.5:
             levels.append(1)
         else:
             levels.append(0)
 
-    # Verify budget constraint; downgrade greedily if over
+    # Downgrade greedily until within budget
     total_bw = sum(QUALITY_BW_MAP[q] for q in levels)
     while total_bw > budget:
-        # Find the node with worst utility-per-mbps and downgrade it
-        worst_idx = -1
-        worst_ratio = float("inf")
+        worst_idx, worst_ratio = -1, float("inf")
         for i, q in enumerate(levels):
             if q > 0:
-                s = obs.nodes[i].num_students
-                ratio = s / (QUALITY_BW_MAP[q] + 1e-8)
+                ratio = obs.nodes[i].num_students / (QUALITY_BW_MAP[q] + 1e-8)
                 if ratio < worst_ratio:
-                    worst_ratio = ratio
-                    worst_idx = i
+                    worst_ratio, worst_idx = ratio, i
         if worst_idx == -1:
             break
         levels[worst_idx] -= 1
@@ -254,7 +266,78 @@ def get_fallback_action(obs: DigiKulObservation) -> DigiKulAction:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Main Inference Loop
+#  Structured log helpers
+#
+#  The Meta/Scaler validator parses stdout for these exact tag formats.
+#  Do NOT alter the field names, order, or value formatting.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def log_start(task: str, env: str, model: str) -> None:
+    """
+    Emit the mandatory [START] line.
+
+    Format: [START] task=<name> env=<benchmark> model=<model>
+    """
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(
+    step: int,
+    action: DigiKulAction,
+    reward: float,
+    done: bool,
+    error: Optional[str] = None,
+) -> None:
+    """
+    Emit one [STEP] line per environment step.
+
+    Format: [STEP] step=<n> action=<action_str> reward=<0.00>
+                   done=<true|false> error=<msg|null>
+
+    Notes:
+      - done uses lowercase JSON booleans (true/false).
+      - reward is formatted to exactly 2 decimal places.
+      - error is the literal string "null" when there is no error.
+      - action is serialised as a compact JSON string.
+    """
+    action_str = json.dumps(action.quality_levels, separators=(",", ":"))
+    done_str = "true" if done else "false"
+    error_str = error if error is not None else "null"
+    print(
+        f"[STEP] step={step} action={action_str} reward={reward:.2f} "
+        f"done={done_str} error={error_str}",
+        flush=True,
+    )
+
+
+def log_end(
+    success: bool,
+    steps: int,
+    score: float,
+    rewards: List[float],
+) -> None:
+    """
+    Emit the mandatory [END] line.
+
+    Format: [END] success=<true|false> steps=<n> score=<score>
+                  rewards=<r1,r2,...>
+
+    Notes:
+      - success uses lowercase JSON booleans.
+      - score is formatted to 4 decimal places.
+      - rewards is a comma-separated list of per-step rewards rounded to 2 dp.
+    """
+    success_str = "true" if success else "false"
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={success_str} steps={steps} "
+        f"score={score:.4f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Episode runner
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_episode(
@@ -265,23 +348,31 @@ def run_episode(
 ) -> dict:
     """Run one full episode, querying the LLM at each step."""
     obs = env.reset()
-    total_reward = 0.0
+    step_rewards: List[float] = []
     llm_calls = 0
     fallback_calls = 0
+    episode_success = True
+
+    # ── [START] ──────────────────────────────────────────────────────────
+    log_start(task=task_name, env=ENV_NAME, model=MODEL_NAME)
 
     if verbose:
-        print(f"\n{'='*60}")
-        print(f"  Task: {task_name.upper()} | Nodes: {len(obs.nodes)} | "
-              f"Budget: {obs.server_bandwidth} Mbps | Steps: {obs.max_time_steps}")
-        print(f"{'='*60}")
+        print(
+            f"\n{'='*60}\n"
+            f"  Task: {task_name.upper()} | Nodes: {len(obs.nodes)} | "
+            f"Budget: {obs.server_bandwidth} Mbps | Steps: {obs.max_time_steps}\n"
+            f"{'='*60}",
+            flush=True,
+        )
 
-    print(f"[START] task={task_name}", flush=True)
     while not obs.done:
-        # Format observation into text prompt
+        current_step = obs.time_step
         prompt = format_observation_prompt(obs)
 
-        # Query the LLM
-        action = None
+        # ── Query LLM with retries ────────────────────────────────────────
+        action: Optional[DigiKulAction] = None
+        step_error: Optional[str] = None
+
         for attempt in range(MAX_PARSE_RETRIES):
             try:
                 llm_response = query_llm(client, prompt)
@@ -290,42 +381,73 @@ def run_episode(
                 if action is not None:
                     break
                 if verbose and attempt == 0:
-                    print(f"  ⚠ Step {obs.time_step}: LLM parse failed, retrying...")
-            except Exception as e:
+                    print(
+                        f"  ⚠ Step {current_step}: LLM parse failed, retrying...",
+                        flush=True,
+                    )
+            except Exception as exc:
                 llm_calls += 1
+                step_error = str(exc)
                 if verbose:
-                    print(f"  ⚠ Step {obs.time_step}: LLM error: {e}")
+                    print(
+                        f"  ⚠ Step {current_step}: LLM error: {exc}",
+                        flush=True,
+                    )
                 break
 
-        # Fallback to heuristic if LLM fails
+        # ── Fallback if LLM failed ────────────────────────────────────────
         if action is None:
             action = get_fallback_action(obs)
             fallback_calls += 1
+            if step_error is None:
+                step_error = "llm_parse_failed_used_fallback"
             if verbose:
-                print(f"  ⚡ Step {obs.time_step}: Using fallback heuristic")
+                print(f"  ⚡ Step {current_step}: Using fallback heuristic", flush=True)
 
-        # Step the environment
+        # ── Environment step ──────────────────────────────────────────────
         obs = env.step(action)
-        total_reward += obs.reward
-        print(f"[STEP] step={obs.time_step} reward={obs.reward}", flush=True)
+        step_rewards.append(obs.reward)
+
+        # ── [STEP] ────────────────────────────────────────────────────────
+        log_step(
+            step=obs.time_step,
+            action=action,
+            reward=obs.reward,
+            done=obs.done,
+            error=step_error,
+        )
 
         if verbose and obs.time_step % 10 == 0:
-            print(f"  Step {obs.time_step}/{obs.max_time_steps} | "
-                  f"Reward: {obs.reward:.4f} | Load: {obs.server_load:.1f} Mbps")
+            print(
+                f"  Step {obs.time_step}/{obs.max_time_steps} | "
+                f"Reward: {obs.reward:.4f} | Load: {obs.server_load:.1f} Mbps",
+                flush=True,
+            )
 
-    # Get final state with grader
+    # ── Retrieve final grader score ───────────────────────────────────────
     final_state = env.state
-    grader = final_state.grader_score
-    print(f"[END] task={task_name} score={grader} steps={obs.time_step}", flush=True)
+    grader = final_state.grader_score if final_state.grader_score is not None else 0.0
+    total_reward = sum(step_rewards)
+
+    # ── [END] ─────────────────────────────────────────────────────────────
+    log_end(
+        success=episode_success,
+        steps=len(step_rewards),
+        score=grader,
+        rewards=step_rewards,
+    )
 
     if verbose:
-        print(f"\n  ── Episode Complete ──")
-        print(f"  Grader Score:     {grader:.4f}")
-        print(f"  Total Reward:     {total_reward:.4f}")
-        print(f"  LLM Calls:        {llm_calls}")
-        print(f"  Fallback Calls:   {fallback_calls}")
-        print(f"  Overload Events:  {final_state.total_overload_events}")
-        print(f"  Budget Violations:{final_state.total_budget_violations}")
+        print(
+            f"\n  ── Episode Complete ──\n"
+            f"  Grader Score:      {grader:.4f}\n"
+            f"  Total Reward:      {total_reward:.4f}\n"
+            f"  LLM Calls:         {llm_calls}\n"
+            f"  Fallback Calls:    {fallback_calls}\n"
+            f"  Overload Events:   {final_state.total_overload_events}\n"
+            f"  Budget Violations: {final_state.total_budget_violations}",
+            flush=True,
+        )
 
     return {
         "task": task_name,
@@ -338,35 +460,42 @@ def run_episode(
     }
 
 
-def main():
-    """Run baseline inference across all three difficulty levels."""
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║       DigiKul-v0  •  Baseline LLM Inference            ║")
-    print("║       Meta OpenEnv Hackathon                           ║")
-    print("╚══════════════════════════════════════════════════════════╝")
-    print(f"\nModel:    {HF_MODEL}")
-    print(f"API Base: {HF_API_BASE}")
-    print(f"Token:    {'✓ Set' if HF_TOKEN else '✗ NOT SET'}")
+# ═══════════════════════════════════════════════════════════════════════════
+#  Entry point
+# ═══════════════════════════════════════════════════════════════════════════
 
-    # Create OpenAI client
+def main() -> None:
+    """Run baseline inference across all three difficulty levels."""
+    print(
+        "╔══════════════════════════════════════════════════════════╗\n"
+        "║       DigiKul-v0  •  Baseline LLM Inference            ║\n"
+        "║       Meta PyTorch OpenEnv Hackathon                   ║\n"
+        "╚══════════════════════════════════════════════════════════╝",
+        flush=True,
+    )
+    print(f"\nModel:    {MODEL_NAME}")
+    print(f"API Base: {API_BASE_URL}")
+    print(f"Key src:  {'API_KEY (validator)' if os.environ.get('API_KEY') else 'HF_TOKEN (local)'}")
+
     llm_client = create_openai_client()
 
     results = []
     for task_name in ["easy", "medium", "hard"]:
-        # Create environment for this task
         env = DigiKulEnvironment(task=task_name, seed=42)
         result = run_episode(env, llm_client, task_name, verbose=True)
         results.append(result)
 
-    # ── Summary ──
+    # ── Summary table ─────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("  BASELINE RESULTS SUMMARY")
     print(f"{'='*60}")
     print(f"  {'Task':<10} {'Grader':>10} {'Reward':>10} {'LLM Calls':>10}")
     print(f"  {'-'*40}")
     for r in results:
-        print(f"  {r['task']:<10} {r['grader_score']:>10.4f} "
-              f"{r['total_reward']:>10.4f} {r['llm_calls']:>10}")
+        print(
+            f"  {r['task']:<10} {r['grader_score']:>10.4f} "
+            f"{r['total_reward']:>10.4f} {r['llm_calls']:>10}"
+        )
     print(f"{'='*60}")
 
     avg_grader = sum(r["grader_score"] for r in results) / len(results)
