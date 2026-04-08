@@ -1,0 +1,30 @@
+[project]
+name = "digikul-env"
+version = "0.1.0"
+description = "DigiKul-v0: A Meta OpenEnv RL environment for remote education bandwidth allocation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "BSD-3-Clause"}
+
+authors = [
+    {name = "GreyCode", email = "greycode@example.com"},
+]
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.24.0",
+    "numpy>=1.24.0",
+    "httpx>=0.25.0",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "openenv-core>=0.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
