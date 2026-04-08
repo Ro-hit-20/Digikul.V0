@@ -100,7 +100,7 @@ $$R_t = R_{\text{utility}} - \lambda_1 P_{\text{overload}} - \lambda_2 P_{\text{
 
 - **Utility** (concave log): $U_i = s_i \cdot \log(1 + b_i^{\text{eff}} / (s_i + \varepsilon))$ — inherent diminishing returns
 - **Overload Penalty** (quadratic): $P_{\text{overload}} = \sum \max(0, b_i - c_i)^2$ — catastrophic for overallocation
-- **Fairness Penalty** (variance): Normalized per-student bandwidth variance — prevents starvation
+- **Fairness Penalty** (MSE): Mean Squared Error of per-student bandwidth — prevents starvation
 - **Budget Penalty** (quadratic): $P_{\text{budget}} = \max(0, \sum b_i - B)^2$ — server crash prevention
 
 ### Programmatic Grader (0.0 → 1.0)

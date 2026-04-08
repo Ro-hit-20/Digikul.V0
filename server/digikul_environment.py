@@ -204,14 +204,33 @@ class DigiKulEnvironment:
         s = float(students)
         return s * math.log(1.0 + eff_bw / (s + self.EPS))
 
-    def _oracle_utility(self, node_idx: int) -> float:
+    def _oracle_utility(self) -> float:
         """
         Theoretical-maximum utility for the grader's denominator.
-        Give the node min(local_capacity, server_budget) — the physical max.
+        Greedily allocates bandwidth up to the server_bandwidth limit 
+        (sorting nodes by potential utility/capacity) so the oracle respects the global budget constraint.
         """
-        cap = self._local_capacity(node_idx)
-        bw = min(cap, self._cfg.server_bandwidth)
-        return self._node_utility(bw, int(self._num_students[node_idx]))
+        # Get active nodes
+        nodes_info = []
+        for i in range(self.num_nodes):
+            s = int(self._num_students[i])
+            cap = self._local_capacity(i)
+            nodes_info.append((s, cap))
+            
+        # Sort by students descending, then capacity descending
+        nodes_info.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        
+        total_utility = 0.0
+        remaining_budget = self._cfg.server_bandwidth
+        
+        for s, cap in nodes_info:
+            if remaining_budget <= 0:
+                break
+            alloc = min(cap, remaining_budget)
+            total_utility += self._node_utility(alloc, s)
+            remaining_budget -= alloc
+            
+        return total_utility
 
     # ── reward function ──────────────────────────────────────────────────
 
@@ -234,7 +253,7 @@ class DigiKulEnvironment:
             self._node_utility(float(effective_bw[i]), int(self._num_students[i]))
             for i in range(N)
         ])
-        r_utility = float(np.mean(utilities))
+        r_utility = float(np.sum(utilities))
 
         # ── Overload penalty (quadratic) ──
         p_overload = float(np.sum(overloads ** 2))
@@ -391,7 +410,7 @@ class DigiKulEnvironment:
             self._node_utility(float(effective_bw[i]), int(self._num_students[i]))
             for i in range(N)
         )
-        step_max_utility = sum(self._oracle_utility(i) for i in range(N))
+        step_max_utility = self._oracle_utility()
 
         self._cumulative_utility += step_utility
         self._cumulative_max_utility += step_max_utility
