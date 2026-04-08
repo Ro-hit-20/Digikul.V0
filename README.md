@@ -1,3 +1,14 @@
+---
+title: DigiKul-v0
+emoji: 🎓
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+tags:
+  - openenv
+---
+
 # DigiKul-v0 🎓📡
 
 **A Meta OpenEnv RL Environment for Remote Education Bandwidth Orchestration**

@@ -17,13 +17,16 @@ dependencies = [
     "numpy>=1.24.0",
     "httpx>=0.25.0",
     "openai>=1.0.0",
+    "openenv-core>=0.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "openenv-core>=0.2.0",
 ]
+
+[project.scripts]
+server = "server.app:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
